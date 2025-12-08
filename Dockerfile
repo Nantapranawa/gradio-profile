@@ -11,15 +11,14 @@ COPY . /app
 RUN pip install --upgrade pip
 
 # Install dependencies from requirements.txt
-# Adding the '--no-cache-dir' to reduce image size by avoiding pip cache
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Add extra steps to ensure compatibility between gradio and huggingface-hub
-# Install specific compatible versions of gradio and huggingface-hub if necessary
-RUN pip install gradio==4.44.1 huggingface-hub==1.2.1
+# If start.bat is needed, make sure it is executable in the container
+# Create a script to run the bat file inside the container
+RUN chmod +x start.bat
 
 # Expose port 5000 (adjust if your app uses a different port)
 EXPOSE 5000
 
-# Run the main script that starts your app
-CMD ["python", "app_local.py"]
+# Run the start.bat file in the container
+CMD ["sh", "-c", "start.bat"]
