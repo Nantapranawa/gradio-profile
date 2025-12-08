@@ -13,12 +13,14 @@ RUN pip install --upgrade pip
 # Install dependencies from requirements.txt
 RUN pip install --no-cache-dir -r requirements.txt
 
-# If start.bat is needed, make sure it is executable in the container
-# Create a script to run the bat file inside the container
-RUN chmod +x start.bat
+# Copy the new shell script into the container
+COPY start.sh /app/start.sh
+
+# Make the shell script executable
+RUN chmod +x /app/start.sh
 
 # Expose port 5000 (adjust if your app uses a different port)
 EXPOSE 5000
 
-# Run the start.bat file in the container
-CMD ["sh", "-c", "start.bat"]
+# Run the start.sh shell script
+CMD ["./start.sh"]
