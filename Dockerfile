@@ -16,9 +16,10 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Expose port 5000 (adjust if your app uses a different port)
 EXPOSE 5000
 
-# If you need to run a shell script (start.sh) in Railway, make sure it's correctly referenced:
-RUN chmod +x start.sh
+# If you have start.sh, ensure it is copied and made executable
+# Uncomment the following lines if you use start.sh
+COPY start.sh /app/start.sh
+RUN chmod +x /app/start.sh
 
 # Use CMD to run the Python script directly or use the start.sh script.
-# If `start.sh` is essential to your app startup, ensure it's copied properly to the container.
-CMD ["sh", "start.sh"]
+CMD ["python", "app_local.py"]
