@@ -18,8 +18,8 @@ EXPOSE 5000
 
 # If you have start.sh, ensure it is copied and made executable
 # Uncomment the following lines if you use start.sh
-COPY start.sh /app/start.sh
-RUN chmod +x /app/start.sh
+# COPY start.sh /app/start.sh
+# RUN chmod +x /app/start.sh
 
 # Use CMD to run the Python script directly or use the start.sh script.
 CMD ["python", "app_local.py"]
