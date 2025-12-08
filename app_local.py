@@ -10,6 +10,12 @@ import pandas as pd
 import gradio as gr
 from cryptography.fernet import Fernet
 import requests
+import sys
+import warnings
+
+# Try to suppress specific warnings if needed
+warnings.filterwarnings("ignore", category=DeprecationWarning)
+
 from office365.sharepoint.client_context import ClientContext
 from office365.runtime.auth.client_credential import ClientCredential
 from office365.runtime.auth.user_credential import UserCredential

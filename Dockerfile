@@ -1,25 +1,34 @@
-# Use a Python base image from Docker Hub
 FROM python:3.9-slim
 
-# Set the working directory inside the container
 WORKDIR /app
 
-# Copy the current directory contents into the container at /app
-COPY . /app
+# Install system dependencies
+RUN apt-get update && apt-get install -y \
+    poppler-utils \
+    tesseract-ocr \
+    tesseract-ocr-eng \
+    libgl1-mesa-glx \
+    libglib2.0-0 \
+    && rm -rf /var/lib/apt/lists/*
 
-# Upgrade pip to ensure it's the latest version
-RUN pip install --upgrade pip
+# Copy requirements
+COPY requirements.txt .
 
-# Install dependencies from requirements.txt
-RUN pip install --no-cache-dir -r requirements.txt
+# Install Python packages with specific versions
+RUN pip install --upgrade pip && \
+    pip install gradio==3.50.2 && \
+    pip install huggingface-hub==0.20.0 && \
+    pip install -r requirements.txt
 
-# Expose port 5000 (adjust if your app uses a different port)
-EXPOSE 5000
+# Copy app
+COPY . .
 
-# If you have start.sh, ensure it is copied and made executable
-# Uncomment the following lines if you use start.sh
-# COPY start.sh /app/start.sh
-# RUN chmod +x /app/start.sh
+# Expose port
+EXPOSE 7860
 
-# Use CMD to run the Python script directly or use the start.sh script.
+# Health check
+# HEALTHCHECK --interval=30s --timeout=30s --start-period=5s --retries=3 \
+#     CMD python -c "import requests; requests.get('http://localhost:7860', timeout=2)"
+
+# Run app
 CMD ["python", "app_local.py"]
