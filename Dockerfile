@@ -1,39 +1,20 @@
-# Use official Python image
-FROM python:3.11-slim
+# Use a Python base image from Docker Hub
+FROM python:3.9
 
-# Set working directory
+# Set the working directory inside the container
 WORKDIR /app
 
-# Install system dependencies if needed
-RUN apt-get update && apt-get install -y \
-    --no-install-recommends \
-    && rm -rf /var/lib/apt/lists/*
+# Copy the current directory contents into the container at /app
+COPY . /app
 
-# Copy requirements first for better caching
-COPY requirements.txt .
+# Install dependencies from requirements.txt
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy all project files
-COPY . .
+# Expose port 5000 (change if your app uses a different port)
+EXPOSE 5000
 
-# Create equivalent shell script from .bat commands
-# Option 1: Direct translation of .bat to shell
-# Create a shell script that does what your .bat does
-RUN echo '#!/bin/bash\npython main.py' > start.sh && \
-    chmod +x start.sh
+# Set the environment variable for Flask or other web frameworks (if applicable)
+# ENV FLASK_APP=app_local.py  # Uncomment if you are using Flask, for example
 
-# OR Option 2: If .bat sets environment variables and runs commands
-# You can set them in Dockerfile directly
-
-# Expose port (adjust based on your app)
-EXPOSE 8000
-
-# Run the application
-# Method A: Direct Python command
-CMD ["python", "app_local.py"]
-
-# Method B: Use the shell script
-# CMD ["./start.sh"]
-
-# Method C: For web apps (like Flask/FastAPI)
-# CMD ["gunicorn", "main:app", "--bind", "0.0.0.0:8000"]
+# Run the main script or the script that starts your app
+CMD ["python", "app_local.py"]  # Change if you want a different entry point
