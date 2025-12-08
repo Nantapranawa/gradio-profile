@@ -17,4 +17,4 @@ EXPOSE 5000
 # ENV FLASK_APP=app_local.py  # Uncomment if you are using Flask, for example
 
 # Run the main script or the script that starts your app
-CMD ["python", "app_local.py"]  # Change if you want a different entry point
+CMD python app_local.py
