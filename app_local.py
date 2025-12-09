@@ -240,7 +240,7 @@ class CVSummaryProcessor:
             # 1. Prepare input folder
             if input_type == "Upload File/Folder":
                 if not uploaded_files:
-                    return None, None, "❌ Silakan upload file CV/Assessment!"
+                    return None, "❌ Silakan upload file CV/Assessment!"
                 
                 # Create temporary folder untuk uploaded files
                 upload_temp_dir = tempfile.mkdtemp(prefix="uploaded_files_")
@@ -276,7 +276,7 @@ class CVSummaryProcessor:
                 progress(0.2, desc=f"Processed {len(files_to_process)} uploaded files")
             else:  # SharePoint
                 if not all([sharepoint_url, sp_username, sp_password]):
-                    return None, None, "❌ SharePoint credentials tidak lengkap!"
+                    return None, "❌ SharePoint credentials tidak lengkap!"
             
                 # Validasi URL format
                 try:
@@ -288,18 +288,18 @@ class CVSummaryProcessor:
                     self.temp_dirs.append(input_folder)
                     progress(0.2, desc=f"Downloaded {num_files} files")
                 except ValueError as ve:
-                    return None, None, f"❌ {str(ve)}"
+                    return None, f"❌ {str(ve)}"
             
             # 2. Validate Excel file
             if excel_file is None:
-                return None, None, "❌ Excel competency file tidak ditemukan!"
+                return None, "❌ Excel competency file tidak ditemukan!"
             
             excel_path = excel_file.name if hasattr(excel_file, 'name') else excel_file
             progress(0.25, desc="Excel file validated")
             
             # 3. Validate template
             if template_file is None:
-                return None, None, "❌ Template PPT tidak ditemukan!"
+                return None, "❌ Template PPT tidak ditemukan!"
             
             template_path = template_file.name if hasattr(template_file, 'name') else template_file
             progress(0.3, desc="Template validated")
@@ -310,8 +310,14 @@ class CVSummaryProcessor:
             os.makedirs(self.current_output_folder, exist_ok=True)
             self.temp_dirs.append(self.current_output_folder)
             
-            # 5. Process OCR and Analysis
+            # 5. Process OCR and Analysis - MODIFIED TO ENSURE ALL COLUMNS
             progress(0.4, desc="Processing PDFs with OCR...")
+            
+            # First, let's see what files we have
+            pdf_files = glob.glob(os.path.join(input_folder, "*.pdf"))
+            print(f"Found {len(pdf_files)} PDF files in input folder")
+            
+            # Call the OCR processing function
             df_result = process_all_documents_with_competency(
                 input_folder=input_folder,
                 excel_path=excel_path,
@@ -320,32 +326,48 @@ class CVSummaryProcessor:
             )
             
             if df_result.empty:
-                return None, None, "❌ Tidak ada data yang berhasil diproses!"
+                return None, "❌ Tidak ada data yang berhasil diproses!"
+            
+            # 6. ENSURE ALL REQUIRED COLUMNS EXIST
+            print("Checking and ensuring all required columns exist...")
+            df_result = self._ensure_required_columns(df_result)
             
             progress(0.6, desc=f"Processed {len(df_result)} candidates")
             
-            # 6. Find generated Excel file
-            excel_files = glob.glob(os.path.join(self.current_output_folder, "hasil_analisis_*.xlsx"))
-            if not excel_files:
-                return None, None, "❌ File Excel hasil tidak ditemukan!"
+            # 7. Save the Excel file with all columns
+            self.result_excel_path = os.path.join(self.current_output_folder, f"hasil_analisis_{timestamp}_complete.xlsx")
             
-            self.result_excel_path = excel_files[-1]
+            # Save DataFrame to Excel with proper formatting
+            with pd.ExcelWriter(self.result_excel_path, engine='openpyxl') as writer:
+                df_result.to_excel(writer, sheet_name='CV_Analysis', index=False)
+                
+                # Auto-adjust column widths
+                worksheet = writer.sheets['CV_Analysis']
+                for idx, col in enumerate(df_result.columns):
+                    column_width = max(df_result[col].astype(str).map(len).max(), len(col)) + 2
+                    worksheet.column_dimensions[chr(65 + idx)].width = min(column_width, 50)
             
-            # 7. Generate PowerPoint presentations
+            print(f"Saved Excel file with columns: {list(df_result.columns)}")
+            
+            # 8. Generate PowerPoint presentations
             progress(0.7, desc="Generating presentations...")
             
             ppt_output_dir = os.path.join(self.current_output_folder, "presentations")
             os.makedirs(ppt_output_dir, exist_ok=True)
             
+            # First, save DataFrame to CSV for pptx_generator
+            csv_path = os.path.join(self.current_output_folder, f"temp_analysis_{timestamp}.csv")
+            df_result.to_csv(csv_path, index=False, encoding='utf-8')
+            
             num_ppts = generate_presentations_from_csv(
-                csv_path=self.result_excel_path,
+                csv_path=csv_path,
                 template_path=template_path,
                 output_dir=ppt_output_dir
             )
             
             progress(0.8, desc=f"Generated {num_ppts} presentations")
             
-            # 8. Create ZIP file untuk download
+            # 9. Create ZIP file untuk download
             self.result_zip_path = os.path.join(self.current_output_folder, f"cv_summary_results_{timestamp}.zip")
             
             # Create ZIP file using zipfile module
@@ -363,16 +385,16 @@ class CVSummaryProcessor:
             
             progress(0.9, desc="Creating output files...")
             
-            # 9. Verify files exist
+            # 10. Verify files exist
             if not os.path.exists(self.result_excel_path):
-                return None, None, f"❌ File Excel tidak ditemukan: {self.result_excel_path}"
+                return None, f"❌ File Excel tidak ditemukan: {self.result_excel_path}"
             
             if not os.path.exists(self.result_zip_path):
-                return None, None, f"❌ File ZIP tidak ditemukan: {self.result_zip_path}"
+                return None, f"❌ File ZIP tidak ditemukan: {self.result_zip_path}"
             
             progress(1.0, desc="Complete!")
             
-            # 10. Generate summary report
+            # 11. Generate summary report
             summary = self._generate_summary_report(df_result, num_ppts)
             
             return summary
@@ -389,40 +411,90 @@ class CVSummaryProcessor:
             if input_type == "SharePoint":
                 self.sp_handler.cleanup()
     
+    def _ensure_required_columns(self, df):
+        """Ensure all required columns exist in the DataFrame"""
+        required_columns = [
+            'nama', 'nik', 'jabatan_terakhir', 'summary_executive', 
+            'education', 'competency', 'filename', 'assessment_result'
+        ]
+        
+        # Add missing columns with default values
+        for col in required_columns:
+            if col not in df.columns:
+                if col == 'nik':
+                    df[col] = 'NO_NIK'
+                elif col == 'competency':
+                    df[col] = 'Belum dianalisis'
+                elif col == 'summary_executive':
+                    df[col] = 'Tidak tersedia'
+                elif col == 'education':
+                    df[col] = 'Tidak tersedia'
+                elif col == 'jabatan_terakhir':
+                    df[col] = 'Tidak tersedia'
+                else:
+                    df[col] = ''
+                print(f"Added missing column: {col}")
+        
+        # Reorder columns to put important ones first
+        column_order = ['nama', 'nik', 'jabatan_terakhir', 'summary_executive', 
+                       'education', 'competency', 'assessment_result', 'filename']
+        
+        # Add any other columns that exist
+        other_cols = [col for col in df.columns if col not in column_order]
+        final_column_order = column_order + other_cols
+        
+        return df[final_column_order]
+    
     def _generate_summary_report(self, df, num_ppts):
         """Generate summary report"""
         # Calculate statistics safely
         nik_count = 0
         competency_count = 0
+        summary_count = 0
+        education_count = 0
+        jabatan_count = 0
         
         if 'nik' in df.columns:
             nik_count = len(df[~df['nik'].astype(str).str.contains('NO_NIK', na=False)])
         
         if 'competency' in df.columns:
-            competency_count = len(df[df['competency'].astype(str) != ''])
+            competency_count = len(df[df['competency'].astype(str).str.strip() != ''])
+        
+        if 'summary_executive' in df.columns:
+            summary_count = len(df[~df['summary_executive'].astype(str).str.contains('Tidak tersedia', na=False)])
+        
+        if 'education' in df.columns:
+            education_count = len(df[~df['education'].astype(str).str.contains('Tidak tersedia', na=False)])
+        
+        if 'jabatan_terakhir' in df.columns:
+            jabatan_count = len(df[~df['jabatan_terakhir'].astype(str).str.contains('Tidak tersedia', na=False)])
+        
+        # Check sample data for debugging
+        print("Sample data from DataFrame:")
+        print(df[['nama', 'nik', 'jabatan_terakhir', 'summary_executive', 'education', 'competency']].head())
         
         report = f"""
 ✅ **PROSES SELESAI!**
 
-📊 **Statistik:**
+📊 **Statistik Analisis:**
 - Total kandidat diproses: {len(df)}
 - Kandidat dengan NIK: {nik_count}
+- Kandidat dengan jabatan terakhir: {jabatan_count}
+- Kandidat dengan summary executive: {summary_count}
+- Kandidat dengan data education: {education_count}
 - Kandidat dengan competency data: {competency_count}
 - Presentasi PowerPoint dibuat: {num_ppts}
 
-📁 **Output Files:**
-- Excel hasil analisis: ✓
-- PowerPoint presentations: ✓ ({num_ppts} file)
-- Semua hasil dikemas dalam 1 file ZIP
+📁 **Kolom Data yang Tersedia:**
+{', '.join(df.columns.tolist())}
 
 📍 **File ZIP berisi:**
-1. File Excel hasil analisis
-2. Folder `presentations/` dengan semua PPT hasil
-3. File teks hasil OCR (jika ada)
+1. File Excel hasil analisis lengkap
+2. Folder `presentations/` dengan semua PPT hasil ({num_ppts} file)
 
 ⬇️ **Download Hasil:**
-- Klik tombol '📊 Download Excel' untuk file Excel saja
-- Klik tombol '📦 Download ZIP' untuk semua hasil
+- File Excel sudah berisi semua data yang dianalisis
+- File ZIP berisi semua hasil termasuk presentasi
 
 ⚠️ **Catatan:**
 - Semua data diproses secara lokal
@@ -591,15 +663,12 @@ def create_interface():
                 
                 status_output = gr.Markdown("Menunggu input...")
                 
-                # Download Section - MENGGUNAKAN FILE COMPONENT YANG LANGSUNG
+                # Download Section
                 gr.Markdown("### 📥 Download Hasil")
                 gr.Markdown("Setelah proses selesai, file akan tersedia di sini:")
                 
                 with gr.Group():
-                    # Hidden components untuk menyimpan status
-                    process_complete = gr.State(False)
-                    
-                    # File components untuk download - TETAP VISIBLE TAPI DISABLE AWALNYA
+                    # File components untuk download
                     excel_output = gr.File(
                         label="📊 Download Excel Results",
                         visible=True,
@@ -657,32 +726,28 @@ def create_interface():
                     return (
                         summary,
                         gr.update(value=excel_path, visible=True, interactive=True),
-                        gr.update(value=zip_path, visible=True, interactive=True),
-                        True  # process_complete
+                        gr.update(value=zip_path, visible=True, interactive=True)
                     )
                 elif excel_path and os.path.exists(excel_path):
                     print("Only Excel exists")
                     return (
                         summary + "\n\n⚠️ **Catatan:** File ZIP tidak berhasil dibuat, tapi Excel sudah tersedia.",
                         gr.update(value=excel_path, visible=True, interactive=True),
-                        gr.update(visible=True, interactive=False, value=None),
-                        True  # process_complete
+                        gr.update(visible=True, interactive=False, value=None)
                     )
                 elif zip_path and os.path.exists(zip_path):
                     print("Only ZIP exists")
                     return (
                         summary + "\n\n⚠️ **Catatan:** File Excel tidak berhasil dibuat, tapi ZIP sudah tersedia.",
                         gr.update(visible=True, interactive=False, value=None),
-                        gr.update(value=zip_path, visible=True, interactive=True),
-                        True  # process_complete
+                        gr.update(value=zip_path, visible=True, interactive=True)
                     )
                 else:
                     print("No valid files")
                     return (
                         summary,
                         gr.update(visible=True, interactive=False, value=None),
-                        gr.update(visible=True, interactive=False, value=None),
-                        False  # process_complete
+                        gr.update(visible=True, interactive=False, value=None)
                     )
                     
             except Exception as e:
@@ -690,7 +755,7 @@ def create_interface():
                 print(f"Error details: {error_msg}")
                 import traceback
                 traceback.print_exc()
-                return error_msg, gr.update(visible=True, interactive=False, value=None), gr.update(visible=True, interactive=False, value=None), False
+                return error_msg, gr.update(visible=True, interactive=False, value=None), gr.update(visible=True, interactive=False, value=None)
         
         # Event handlers untuk process button
         process_btn.click(
@@ -707,8 +772,7 @@ def create_interface():
             outputs=[
                 status_output,           # summary text
                 excel_output,            # Excel file component
-                zip_output,              # ZIP file component
-                process_complete         # process status
+                zip_output               # ZIP file component
             ]
         )
         
@@ -723,6 +787,10 @@ def create_interface():
             fn=reset_downloads,
             outputs=[excel_output, zip_output]
         )
+        
+        upload_files.change(reset_downloads, outputs=[excel_output, zip_output])
+        excel_file.change(reset_downloads, outputs=[excel_output, zip_output])
+        template_file.change(reset_downloads, outputs=[excel_output, zip_output])
         
         # Cleanup when interface closes
         app.unload(processor.cleanup_all)
