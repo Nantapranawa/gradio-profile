@@ -1,26 +1,39 @@
-# Use a lightweight Python image
-FROM python:3.9-slim
-
-# Install system dependencies
-RUN apt-get update && apt-get install -y \
-    tesseract-ocr \
-    poppler-utils \
-    && rm -rf /var/lib/apt/lists/*
+# Use official Python image
+FROM python:3.11-slim
 
 # Set working directory
 WORKDIR /app
 
-# Copy requirements first (for better caching)
-COPY requirements.txt .
+# Install system dependencies if needed
+RUN apt-get update && apt-get install -y \
+    --no-install-recommends \
+    && rm -rf /var/lib/apt/lists/*
 
-# Install Python dependencies
+# Copy requirements first for better caching
+COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy application code
+# Copy all project files
 COPY . .
 
-# Expose port
+# Create equivalent shell script from .bat commands
+# Option 1: Direct translation of .bat to shell
+# Create a shell script that does what your .bat does
+RUN echo '#!/bin/bash\npython main.py' > start.sh && \
+    chmod +x start.sh
+
+# OR Option 2: If .bat sets environment variables and runs commands
+# You can set them in Dockerfile directly
+
+# Expose port (adjust based on your app)
 EXPOSE 8000
 
 # Run the application
-CMD ["python", "-m", "uvicorn", "app_local:app", "--host", "0.0.0.0", "--port", "8000"]
+# Method A: Direct Python command
+CMD ["python", "app_local.py"]
+
+# Method B: Use the shell script
+# CMD ["./start.sh"]
+
+# Method C: For web apps (like Flask/FastAPI)
+# CMD ["gunicorn", "main:app", "--bind", "0.0.0.0:8000"]

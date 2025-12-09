@@ -10,17 +10,6 @@ import pandas as pd
 import gradio as gr
 from cryptography.fernet import Fernet
 import requests
-import sys
-import warnings
-
-import os
-import uvicorn
-from fastapi import FastAPI
-from fastapi.staticfiles import StaticFiles
-
-# Try to suppress specific warnings if needed
-warnings.filterwarnings("ignore", category=DeprecationWarning)
-
 from office365.sharepoint.client_context import ClientContext
 from office365.runtime.auth.client_credential import ClientCredential
 from office365.runtime.auth.user_credential import UserCredential
@@ -566,30 +555,22 @@ def create_interface():
 
 # ==================== MAIN ====================
 if __name__ == "__main__":
+    # Load authorized users (bisa dari file atau database)
+    AUTHORIZED_USERS = {
+        "admin": "secure_password_hash_here",
+        "hr_team": "another_secure_hash",
+    }
     
-    # Create FastAPI app for server deployment
-    fastapi_app = FastAPI()
+    # Create interface
+    app = create_interface()
     
-    # Mount Gradio app on FastAPI
-    gradio_app = create_interface()
-    
-    @fastapi_app.get("/")
-    async def root():
-        return {"message": "CV Summary Generator API"}
-    
-    # For Railway/Render deployment
-    port = int(os.environ.get("PORT", 7860))
-    
-    # Launch Gradio app with server settings
-    gradio_app.launch(
-        server_name="0.0.0.0",  # MUST be 0.0.0.0 for server
-        server_port=port,
-        share=False,  # IMPORTANT: Set to False for server
-        auth=None,  # Remove authentication or use environment variables
-        # Remove ssl_verify for server deployment
-        show_error=True,
-        # Add these parameters for stability
-        prevent_thread_lock=True,
-        show_api=False,
-        quiet=True
+    # Launch with authentication
+    app.launch(
+        server_name="127.0.0.1",  # Localhost only
+        server_port=7860,
+        share=False,  # No public sharing
+        auth=list(AUTHORIZED_USERS.items()),  # Require authentication
+        auth_message="🔒 Login dengan credentials yang diberikan",
+        ssl_verify=True,
+        show_error=True
     )
