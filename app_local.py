@@ -839,7 +839,7 @@ if __name__ == "__main__":
     
     # Launch with updated API settings
     app.launch(
-        server_name="0.0.0.0",  # Listen on all network interfaces
+        server_name="127.0.0.1",  # Listen on all network interfaces
         server_port=int(os.getenv("PORT", 7860)),  # Use environment variable for dynamic port
         share=False,
         auth=AUTH_CREDENTIALS,  # List of tuples
