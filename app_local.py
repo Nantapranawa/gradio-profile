@@ -214,6 +214,7 @@ class CVSummaryProcessor:
         self.secure_handler = SecureDataHandler()
         self.sp_handler = SharePointHandler()
         self.temp_dirs = []
+        self.current_output_folder = None
     
     def process_pipeline(self, 
                         input_type,
@@ -223,7 +224,6 @@ class CVSummaryProcessor:
                         sp_password,
                         excel_file,
                         template_file,
-                        output_folder_path=None,
                         progress=gr.Progress()):
         """
         Process complete pipeline: OCR -> Analysis -> PPT Generation
@@ -291,48 +291,44 @@ class CVSummaryProcessor:
             excel_path = excel_file.name if hasattr(excel_file, 'name') else excel_file
             progress(0.25, desc="Excel file validated")
             
-            # 3. Gunakan output folder yang dipilih user atau buat yang baru
-            if output_folder_path and os.path.isdir(output_folder_path):
-                # Gunakan folder yang dipilih user
-                user_output_folder = output_folder_path
-            else:
-                # Buat folder baru dengan timestamp
-                timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-                user_output_folder = os.path.join(tempfile.gettempdir(), f"cv_output_{timestamp}")
+            # 3. Validate template
+            if template_file is None:
+                return None, None, "❌ Template PPT tidak ditemukan!"
             
-            os.makedirs(user_output_folder, exist_ok=True)
-            self.temp_dirs.append(user_output_folder)
+            template_path = template_file.name if hasattr(template_file, 'name') else template_file
+            progress(0.3, desc="Template validated")
             
-            # 4. Process OCR and Analysis
-            progress(0.3, desc="Processing PDFs with OCR...")
+            # 4. Create output folder with timestamp
+            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+            self.current_output_folder = os.path.join(tempfile.gettempdir(), f"cv_output_{timestamp}")
+            os.makedirs(self.current_output_folder, exist_ok=True)
+            self.temp_dirs.append(self.current_output_folder)
+            
+            # 5. Process OCR and Analysis
+            progress(0.4, desc="Processing PDFs with OCR...")
             df_result = process_all_documents_with_competency(
                 input_folder=input_folder,
                 excel_path=excel_path,
-                output_folder=user_output_folder,
-                output_excel=f"hasil_analisis_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
+                output_folder=self.current_output_folder,
+                output_excel=f"hasil_analisis_{timestamp}.xlsx"
             )
             
             if df_result.empty:
                 return None, None, "❌ Tidak ada data yang berhasil diproses!"
             
-            progress(0.7, desc=f"Processed {len(df_result)} candidates")
+            progress(0.6, desc=f"Processed {len(df_result)} candidates")
             
-            # 5. Find generated Excel file
-            excel_files = glob.glob(os.path.join(user_output_folder, "hasil_analisis_*.xlsx"))
+            # 6. Find generated Excel file
+            excel_files = glob.glob(os.path.join(self.current_output_folder, "hasil_analisis_*.xlsx"))
             if not excel_files:
                 return None, None, "❌ File Excel hasil tidak ditemukan!"
             
             result_excel = excel_files[-1]
             
-            # 6. Validate template
-            if template_file is None:
-                return None, None, "❌ Template PPT tidak ditemukan!"
-            
-            template_path = template_file.name if hasattr(template_file, 'name') else template_file
-            progress(0.75, desc="Generating presentations...")
-            
             # 7. Generate PowerPoint presentations
-            ppt_output_dir = os.path.join(user_output_folder, "presentations")
+            progress(0.7, desc="Generating presentations...")
+            
+            ppt_output_dir = os.path.join(self.current_output_folder, "presentations")
             os.makedirs(ppt_output_dir, exist_ok=True)
             
             num_ppts = generate_presentations_from_csv(
@@ -341,19 +337,45 @@ class CVSummaryProcessor:
                 output_dir=ppt_output_dir
             )
             
-            progress(0.9, desc=f"Generated {num_ppts} presentations")
+            progress(0.8, desc=f"Generated {num_ppts} presentations")
+            
+            # 8. Create ZIP file untuk download (tanpa RAR)
+            zip_path = os.path.join(self.current_output_folder, f"cv_summary_results_{timestamp}.zip")
+            
+            # Create ZIP file using zipfile module
+            with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
+                # Add Excel file
+                zipf.write(result_excel, os.path.basename(result_excel))
+                
+                # Add all presentations
+                for root, dirs, files in os.walk(ppt_output_dir):
+                    for file in files:
+                        if file.endswith('.pptx'):
+                            file_path = os.path.join(root, file)
+                            arcname = os.path.join("presentations", os.path.relpath(file_path, ppt_output_dir))
+                            zipf.write(file_path, arcname)
+            
+            progress(0.9, desc="Creating output files...")
+            
+            # 9. Verify files exist
+            if not os.path.exists(result_excel):
+                return None, None, f"❌ File Excel tidak ditemukan: {result_excel}"
+            
+            if not os.path.exists(zip_path):
+                return None, None, f"❌ File ZIP tidak ditemukan: {zip_path}"
             
             progress(1.0, desc="Complete!")
             
-            # 8. Generate summary report (TANPA ZIP FILE)
-            summary = self._generate_summary_report(df_result, num_ppts, user_output_folder)
+            # 10. Generate summary report
+            summary = self._generate_summary_report(df_result, num_ppts, zip_path)
             
-            # 9. Return folder path sebagai hasil, bukan ZIP file
-            return result_excel, user_output_folder, summary
+            return result_excel, zip_path, summary
             
         except Exception as e:
             error_msg = f"❌ Error: {str(e)}"
             print(error_msg)
+            import traceback
+            traceback.print_exc()
             return None, None, error_msg
         
         finally:
@@ -361,34 +383,41 @@ class CVSummaryProcessor:
             if input_type == "SharePoint":
                 self.sp_handler.cleanup()
     
-    def _generate_summary_report(self, df, num_ppts, output_folder):
-        """Generate summary report TANPA ZIP"""
+    def _generate_summary_report(self, df, num_ppts, zip_path):
+        """Generate summary report"""
+        # Calculate statistics safely
+        nik_count = 0
+        competency_count = 0
+        
+        if 'nik' in df.columns:
+            nik_count = len(df[~df['nik'].astype(str).str.contains('NO_NIK', na=False)])
+        
+        if 'competency' in df.columns:
+            competency_count = len(df[df['competency'].astype(str) != ''])
+        
         report = f"""
 ✅ **PROSES SELESAI!**
 
 📊 **Statistik:**
 - Total kandidat diproses: {len(df)}
-- Kandidat dengan NIK: {len(df[~df['nik'].str.contains('NO_NIK', na=False)])}
-- Kandidat dengan competency data: {len(df[df['competency'] != ''])}
+- Kandidat dengan NIK: {nik_count}
+- Kandidat dengan competency data: {competency_count}
 - Presentasi PowerPoint dibuat: {num_ppts}
 
 📁 **Output Files:**
 - Excel hasil analisis: ✓
-- PowerPoint presentations: ✓
-- Text files (OCR results): ✓
+- PowerPoint presentations: ✓ ({num_ppts} file)
+- Semua hasil dikemas dalam 1 file ZIP
 
-📍 **Lokasi Folder Hasil:**
-`{output_folder}`
+📍 **File ZIP berisi:**
+1. File Excel hasil analisis
+2. Folder `presentations/` dengan semua PPT hasil
+3. File teks hasil OCR (jika ada)
 
-📂 **Struktur Folder:**
-- `{output_folder}/` - Folder utama hasil
-- `{output_folder}/presentations/` - File PowerPoint (.pptx)
-- `{output_folder}/hasil_analisis_*.xlsx` - File Excel hasil
-
-⚠️ **Catatan Keamanan:**
+⚠️ **Catatan:**
 - Semua data diproses secara lokal
-- File temporary akan dihapus otomatis setelah session berakhir
-- File hasil telah disimpan di folder yang Anda pilih
+- Download hasil segera sebelum session berakhir
+- File temporary akan dihapus otomatis
 """
         return report
     
@@ -396,10 +425,12 @@ class CVSummaryProcessor:
         """Cleanup all temporary directories"""
         for temp_dir in self.temp_dirs:
             if os.path.exists(temp_dir):
-                # Hanya hapus jika di temporary directory sistem
-                if temp_dir.startswith(tempfile.gettempdir()):
+                try:
                     shutil.rmtree(temp_dir)
+                except Exception as e:
+                    print(f"Error cleaning up {temp_dir}: {e}")
         self.temp_dirs.clear()
+        self.current_output_folder = None
 
     def validate_sharepoint_url(self, url):
         """Validate SharePoint URL format"""
@@ -435,6 +466,16 @@ def create_interface():
         border-radius: 5px;
         padding: 15px;
         margin: 10px 0;
+    }
+    .download-section {
+        background-color: #f8f9fa;
+        border: 2px solid #dee2e6;
+        border-radius: 8px;
+        padding: 20px;
+        margin: 20px 0;
+    }
+    .download-btn {
+        margin: 5px;
     }
     """
     
@@ -510,13 +551,6 @@ def create_interface():
                     type="filepath"
                 )
                 
-                # Output Folder Selection - gunakan gr.Textbox saja
-                output_folder = gr.Textbox(
-                    label="📂 Path Folder Output",
-                    placeholder="Contoh: /tmp/cv_results atau D:/CV_Results",
-                    info="Masukkan path lengkap folder untuk menyimpan hasil"
-                )
-                
                 # Process Button
                 process_btn = gr.Button(
                     "🚀 Proses Pipeline End-to-End",
@@ -529,16 +563,42 @@ def create_interface():
                 
                 status_output = gr.Markdown("Menunggu input...")
                 
-                excel_output = gr.File(
-                    label="📊 Download Excel Results",
-                    visible=False
-                )
+                # Download Section - MENGGUNAKAN BUTTON
+                gr.Markdown("### 📥 Download Hasil")
+                gr.Markdown("Setelah proses selesai, klik tombol untuk mendownload:")
                 
-                # Folder output info
-                folder_output = gr.Textbox(
-                    label="📁 Lokasi Folder Hasil",
-                    visible=False
-                )
+                with gr.Group():
+                    # Container untuk menyimpan path file sementara
+                    excel_path_store = gr.State(None)
+                    zip_path_store = gr.State(None)
+                    
+                    with gr.Row():
+                        excel_download_btn = gr.Button(
+                            "📊 Download Excel Results",
+                            visible=False,
+                            variant="secondary",
+                            size="sm",
+                            elem_classes="download-btn"
+                        )
+                        
+                        zip_download_btn = gr.Button(
+                            "📦 Download All Results (ZIP)",
+                            visible=False,
+                            variant="secondary",
+                            size="sm",
+                            elem_classes="download-btn"
+                        )
+                    
+                    # Hidden file components untuk handle download
+                    excel_download_file = gr.File(
+                        label="",
+                        visible=False
+                    )
+                    
+                    zip_download_file = gr.File(
+                        label="",
+                        visible=False
+                    )
         
         # Toggle visibility based on input type
         def toggle_input_type(choice):
@@ -553,25 +613,32 @@ def create_interface():
             outputs=[upload_group, sharepoint_group]
         )
         
-        # HAPUS fungsi browse_folder karena menggunakan Tkinter
-        # HAPUS tombol browse_btn dan click handler-nya
+        # Function untuk handle Excel download
+        def download_excel_handler(excel_path):
+            if excel_path and os.path.exists(excel_path):
+                print(f"Downloading Excel: {excel_path}")
+                # Return file untuk download
+                return gr.update(value=excel_path, visible=True)
+            print("Excel file not found")
+            return gr.update(visible=False)
+        
+        # Function untuk handle ZIP download
+        def download_zip_handler(zip_path):
+            if zip_path and os.path.exists(zip_path):
+                print(f"Downloading ZIP: {zip_path}")
+                # Return file untuk download
+                return gr.update(value=zip_path, visible=True)
+            print("ZIP file not found")
+            return gr.update(visible=False)
         
         # Process button click
         def process_wrapper(input_type, upload_files, sp_url, sp_username, sp_password, 
-                          excel_file, template_file, output_folder_path):
+                          excel_file, template_file):
             try:
-                # Validasi output folder
-                if not output_folder_path:
-                    return "❌ Silakan masukkan path folder output terlebih dahulu!", gr.update(visible=False), gr.update(visible=False)
-                
-                # Normalize path (untuk konsistensi di semua OS)
-                output_folder_path = os.path.normpath(output_folder_path)
-                
-                # Buat folder output jika belum ada
-                os.makedirs(output_folder_path, exist_ok=True)
+                print("Processing started...")
                 
                 # Panggil fungsi process_pipeline
-                excel, folder_result, summary = processor.process_pipeline(
+                excel_path, zip_path, summary = processor.process_pipeline(
                     input_type=input_type,
                     uploaded_files=upload_files,
                     sharepoint_url=sp_url,
@@ -579,28 +646,66 @@ def create_interface():
                     sp_password=sp_password,
                     excel_file=excel_file,
                     template_file=template_file,
-                    output_folder_path=output_folder_path,
                     progress=gr.Progress()
                 )
                 
-                if excel and folder_result:
+                # Debug info
+                print(f"Excel path: {excel_path}")
+                print(f"ZIP path: {zip_path}")
+                
+                if excel_path and zip_path and os.path.exists(excel_path) and os.path.exists(zip_path):
+                    print("Both files exist, updating UI...")
                     return (
                         summary,
-                        gr.update(value=excel, visible=True),
-                        gr.update(value=folder_result, visible=True)
+                        excel_path,  # Store path untuk Excel
+                        zip_path,    # Store path untuk ZIP
+                        gr.update(visible=True),  # Excel button visible
+                        gr.update(visible=True),  # ZIP button visible
+                        gr.update(visible=False),  # Excel file hidden
+                        gr.update(visible=False)   # ZIP file hidden
+                    )
+                elif excel_path and os.path.exists(excel_path):
+                    print("Only Excel exists")
+                    return (
+                        summary + "\n\n⚠️ **Catatan:** File ZIP tidak berhasil dibuat, tapi Excel sudah tersedia.",
+                        excel_path,  # Store path untuk Excel
+                        None,        # No ZIP path
+                        gr.update(visible=True),  # Excel button visible
+                        gr.update(visible=False), # ZIP button hidden
+                        gr.update(visible=False),  # Excel file hidden
+                        gr.update(visible=False)   # ZIP file hidden
+                    )
+                elif zip_path and os.path.exists(zip_path):
+                    print("Only ZIP exists")
+                    return (
+                        summary + "\n\n⚠️ **Catatan:** File Excel tidak berhasil dibuat, tapi ZIP sudah tersedia.",
+                        None,        # No Excel path
+                        zip_path,    # Store path untuk ZIP
+                        gr.update(visible=False), # Excel button hidden
+                        gr.update(visible=True),  # ZIP button visible
+                        gr.update(visible=False),  # Excel file hidden
+                        gr.update(visible=False)   # ZIP file hidden
                     )
                 else:
+                    print("No valid files")
                     return (
                         summary,
-                        gr.update(visible=False),
-                        gr.update(visible=False)
+                        None,  # No Excel path
+                        None,  # No ZIP path
+                        gr.update(visible=False), # Excel button hidden
+                        gr.update(visible=False), # ZIP button hidden
+                        gr.update(visible=False),  # Excel file hidden
+                        gr.update(visible=False)   # ZIP file hidden
                     )
                     
             except Exception as e:
                 error_msg = f"❌ Error: {str(e)}"
-                print(error_msg)
-                return error_msg, gr.update(visible=False), gr.update(visible=False)
+                print(f"Error details: {error_msg}")
+                import traceback
+                traceback.print_exc()
+                return error_msg, None, None, gr.update(visible=False), gr.update(visible=False), gr.update(visible=False), gr.update(visible=False)
         
+        # Event handlers untuk process button
         process_btn.click(
             fn=process_wrapper,
             inputs=[
@@ -610,11 +715,42 @@ def create_interface():
                 sp_username,
                 sp_password,
                 excel_file,
-                template_file,
-                output_folder
+                template_file
             ],
-            outputs=[status_output, excel_output, folder_output]
+            outputs=[
+                status_output,           # summary text
+                excel_path_store,        # store excel path
+                zip_path_store,          # store zip path  
+                excel_download_btn,      # excel button visibility
+                zip_download_btn,        # zip button visibility
+                excel_download_file,     # hidden excel file component
+                zip_download_file        # hidden zip file component
+            ]
         )
+        
+        # Event handlers untuk download buttons
+        excel_download_btn.click(
+            fn=download_excel_handler,
+            inputs=[excel_path_store],
+            outputs=[excel_download_file]
+        ).then(
+            # Reset file visibility setelah 5 detik
+            fn=lambda: gr.update(visible=False),
+            outputs=[excel_download_file]
+        )
+        
+        zip_download_btn.click(
+            fn=download_zip_handler,
+            inputs=[zip_path_store],
+            outputs=[zip_download_file]
+        ).then(
+            # Reset file visibility setelah 5 detik
+            fn=lambda: gr.update(visible=False),
+            outputs=[zip_download_file]
+        )
+        
+        # Cleanup when interface closes
+        app.unload(processor.cleanup_all)
         
         gr.Markdown("""
         ---
@@ -625,31 +761,22 @@ def create_interface():
            - **SharePoint:** Masukkan URL SharePoint dan credentials
         
         2. **Upload Files:**
-           - CV & Assessment (PDF atau ZIP)
            - Excel Competency (wajib)
            - Template PowerPoint (wajib)
         
-        3. **Masukkan Path Folder Output:**
-           - **Railway/Server:** `/tmp/cv_results`
-           - **Linux/Mac:** `/home/user/cv_results`
-           - **Windows:** `C:/Users/NamaUser/Documents/CV_Results`
+        3. **Klik Proses:** Sistem akan menjalankan pipeline lengkap secara otomatis
         
-        4. **Klik Proses:** Sistem akan menjalankan pipeline lengkap secara otomatis
-        
-        5. **Hasil:** 
-           - Download file Excel hasil analisis
-           - File PowerPoint akan langsung tersimpan di folder yang Anda tentukan
+        4. **Download Hasil:** 
+           - **Excel Results:** Klik tombol untuk download file Excel
+           - **All Results (ZIP):** Klik tombol untuk download semua hasil termasuk PPT
         
         ⏱️ **Estimasi Waktu:** 5-15 menit tergantung jumlah dokumen
         
-        **📝 Catatan Upload:**
-        - Bisa upload multiple PDF files langsung
-        - Atau upload satu ZIP file yang berisi semua PDF
-        - Format file yang didukung: .pdf, .zip
-        
-        **🔧 Untuk Railway Deployment:**
-        - Gunakan path `/tmp/` untuk folder output karena itu writable
-        - Contoh: `/tmp/cv_results_2024`
+        **📝 Catatan:**
+        - File hasil akan otomatis terhapus setelah session berakhir
+        - Pastikan untuk mendownload file hasil segera setelah proses selesai
+        - Tombol download hanya muncul setelah proses selesai
+        - Format output: Excel (.xlsx) dan ZIP file
         """)
     
     return app
@@ -674,6 +801,7 @@ if __name__ == "__main__":
         share=False,
         auth=AUTH_CREDENTIALS,  # List of tuples
         auth_message="🔒 Login dengan credentials yang diberikan",
-        ssl_verify=True,  # Only enable if you're deploying securely
-        show_error=True
+        ssl_verify=False,  # Disable untuk testing
+        show_error=True,
+        debug=True  # Enable debug mode
     )
