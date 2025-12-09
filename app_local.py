@@ -396,7 +396,11 @@ def create_interface():
     }
     """
     
-    with gr.Blocks(css=custom_css, title="CV Summary Generator - Secure") as app:
+    # For Gradio 6+, use the new way to apply CSS
+    with gr.Blocks(title="CV Summary Generator - Secure") as app:
+        
+        # Add CSS to the app
+        app.css = custom_css
         
         gr.Markdown("""
         # 🔒 CV Summary Generator (Secure & Private)
@@ -413,6 +417,8 @@ def create_interface():
         </ul>
         </div>
         """)
+        
+        # ... rest of your code ...
         
         with gr.Row():
             with gr.Column(scale=2):
@@ -555,21 +561,23 @@ def create_interface():
 
 # ==================== MAIN ====================
 if __name__ == "__main__":
-    # Load authorized users (bisa dari file atau database)
-    AUTHORIZED_USERS = {
-        "admin": "secure_password_hash_here",
-        "hr_team": "another_secure_hash",
-    }
+    # For testing with plain text passwords
+    # Use a simple list of (username, password) tuples
+    AUTH_CREDENTIALS = [
+        ("admin", "admin123"),
+        ("hr_team", "hr123"),
+        ("user", "password123")
+    ]
     
     # Create interface
     app = create_interface()
     
     # Launch with authentication
     app.launch(
-        server_name="127.0.0.1",  # Localhost only
+        server_name="127.0.0.1",
         server_port=7860,
-        share=False,  # No public sharing
-        auth=list(AUTHORIZED_USERS.items()),  # Require authentication
+        share=False,
+        auth=AUTH_CREDENTIALS,  # List of tuples
         auth_message="🔒 Login dengan credentials yang diberikan",
         ssl_verify=True,
         show_error=True
