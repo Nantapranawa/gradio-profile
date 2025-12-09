@@ -510,16 +510,12 @@ def create_interface():
                     type="filepath"
                 )
                 
-                # Output Folder Selection
+                # Output Folder Selection - gunakan gr.Textbox saja
                 output_folder = gr.Textbox(
-                    label="📂 Pilih Folder Output",
-                    placeholder="C:/Users/NamaUser/Documents/CV_Results",
-                    info="Pilih folder untuk menyimpan hasil (PPT dan Excel)"
+                    label="📂 Path Folder Output",
+                    placeholder="Contoh: /tmp/cv_results atau D:/CV_Results",
+                    info="Masukkan path lengkap folder untuk menyimpan hasil"
                 )
-                
-                # Browse Button
-                with gr.Row():
-                    browse_btn = gr.Button("📁 Browse Folder", size="sm")
                 
                 # Process Button
                 process_btn = gr.Button(
@@ -538,7 +534,7 @@ def create_interface():
                     visible=False
                 )
                 
-                # Ganti ZIP output dengan folder path info
+                # Folder output info
                 folder_output = gr.Textbox(
                     label="📁 Lokasi Folder Hasil",
                     visible=False
@@ -557,33 +553,8 @@ def create_interface():
             outputs=[upload_group, sharepoint_group]
         )
         
-        # Function untuk browse folder
-        def browse_folder():
-            import tkinter as tk
-            from tkinter import filedialog
-            
-            root = tk.Tk()
-            root.withdraw()  # Hide the main window
-            root.attributes('-topmost', True)  # Bring dialog to front
-            
-            folder_path = filedialog.askdirectory(
-                title="Pilih Folder untuk Menyimpan Hasil",
-                initialdir=os.path.expanduser("~")  # Start from user's home directory
-            )
-            
-            root.destroy()
-            
-            if folder_path:
-                return folder_path
-            else:
-                return ""
-        
-        # Browse button click
-        browse_btn.click(
-            fn=browse_folder,
-            inputs=[],
-            outputs=[output_folder]
-        )
+        # HAPUS fungsi browse_folder karena menggunakan Tkinter
+        # HAPUS tombol browse_btn dan click handler-nya
         
         # Process button click
         def process_wrapper(input_type, upload_files, sp_url, sp_username, sp_password, 
@@ -591,7 +562,10 @@ def create_interface():
             try:
                 # Validasi output folder
                 if not output_folder_path:
-                    return "❌ Silakan pilih folder output terlebih dahulu!", gr.update(visible=False), gr.update(visible=False)
+                    return "❌ Silakan masukkan path folder output terlebih dahulu!", gr.update(visible=False), gr.update(visible=False)
+                
+                # Normalize path (untuk konsistensi di semua OS)
+                output_folder_path = os.path.normpath(output_folder_path)
                 
                 # Buat folder output jika belum ada
                 os.makedirs(output_folder_path, exist_ok=True)
@@ -655,13 +629,16 @@ def create_interface():
            - Excel Competency (wajib)
            - Template PowerPoint (wajib)
         
-        3. **Pilih Folder Output:** Klik "Browse Folder" untuk memilih lokasi penyimpanan hasil
+        3. **Masukkan Path Folder Output:**
+           - **Railway/Server:** `/tmp/cv_results`
+           - **Linux/Mac:** `/home/user/cv_results`
+           - **Windows:** `C:/Users/NamaUser/Documents/CV_Results`
         
         4. **Klik Proses:** Sistem akan menjalankan pipeline lengkap secara otomatis
         
         5. **Hasil:** 
            - Download file Excel hasil analisis
-           - File PowerPoint akan langsung tersimpan di folder yang Anda pilih
+           - File PowerPoint akan langsung tersimpan di folder yang Anda tentukan
         
         ⏱️ **Estimasi Waktu:** 5-15 menit tergantung jumlah dokumen
         
@@ -669,6 +646,10 @@ def create_interface():
         - Bisa upload multiple PDF files langsung
         - Atau upload satu ZIP file yang berisi semua PDF
         - Format file yang didukung: .pdf, .zip
+        
+        **🔧 Untuk Railway Deployment:**
+        - Gunakan path `/tmp/` untuk folder output karena itu writable
+        - Contoh: `/tmp/cv_results_2024`
         """)
     
     return app
@@ -688,7 +669,7 @@ if __name__ == "__main__":
     
     # Launch with updated API settings
     app.launch(
-        server_name="0.0.0.0",  # Listen on all network interfaces
+        server_name="127.0.0.1",  # Listen on all network interfaces
         server_port=int(os.getenv("PORT", 7860)),  # Use environment variable for dynamic port
         share=False,
         auth=AUTH_CREDENTIALS,  # List of tuples
