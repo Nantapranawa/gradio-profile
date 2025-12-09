@@ -3,7 +3,8 @@ import re
 import glob
 import shutil
 import tempfile
-import hashlib
+import zipfile
+import msal
 from datetime import datetime
 from pathlib import Path
 import pandas as pd
@@ -70,9 +71,6 @@ class SecureDataHandler:
             os.remove(file_path)
 
 # ==================== SHAREPOINT HANDLER ====================
-from office365.runtime.auth.client_credential import ClientCredential
-from office365.sharepoint.client_context import ClientContext
-
 class SharePointHandler:
     def __init__(self, client_id=None, client_secret=None):
         self.client_id = client_id
@@ -219,26 +217,57 @@ class CVSummaryProcessor:
     
     def process_pipeline(self, 
                         input_type,
-                        local_folder_path,
+                        uploaded_files,
                         sharepoint_url,
                         sp_username,
                         sp_password,
                         excel_file,
                         template_file,
+                        output_folder_path=None,
                         progress=gr.Progress()):
         """
         Process complete pipeline: OCR -> Analysis -> PPT Generation
         """
-        output_folder = None
         try:
             progress(0, desc="Initializing...")
             
             # 1. Prepare input folder
-            if input_type == "Local Folder":
-                if not local_folder_path or not os.path.exists(local_folder_path):
-                    return None, None, "❌ Local folder path tidak valid!"
-                input_folder = local_folder_path
-                progress(0.1, desc="Using local folder")
+            if input_type == "Upload File/Folder":
+                if not uploaded_files:
+                    return None, None, "❌ Silakan upload file CV/Assessment!"
+                
+                # Create temporary folder untuk uploaded files
+                upload_temp_dir = tempfile.mkdtemp(prefix="uploaded_files_")
+                self.temp_dirs.append(upload_temp_dir)
+                
+                # Process uploaded files
+                files_to_process = []
+                if isinstance(uploaded_files, str):
+                    files_to_process = [uploaded_files]
+                elif isinstance(uploaded_files, list):
+                    files_to_process = uploaded_files
+                
+                for file_path in files_to_process:
+                    if not file_path:
+                        continue
+                        
+                    # Check if it's a ZIP file
+                    if file_path.lower().endswith('.zip'):
+                        # Extract ZIP file
+                        try:
+                            with zipfile.ZipFile(file_path, 'r') as zip_ref:
+                                zip_ref.extractall(upload_temp_dir)
+                            print(f"Extracted ZIP file: {file_path}")
+                        except Exception as e:
+                            print(f"Error extracting ZIP file {file_path}: {e}")
+                            # If extraction fails, copy the ZIP as-is
+                            shutil.copy(file_path, upload_temp_dir)
+                    else:
+                        # Copy PDF files directly
+                        shutil.copy(file_path, upload_temp_dir)
+                
+                input_folder = upload_temp_dir
+                progress(0.2, desc=f"Processed {len(files_to_process)} uploaded files")
             else:  # SharePoint
                 if not all([sharepoint_url, sp_username, sp_password]):
                     return None, None, "❌ SharePoint credentials tidak lengkap!"
@@ -259,22 +288,28 @@ class CVSummaryProcessor:
             if excel_file is None:
                 return None, None, "❌ Excel competency file tidak ditemukan!"
             
-            excel_path = excel_file.name
+            excel_path = excel_file.name if hasattr(excel_file, 'name') else excel_file
             progress(0.25, desc="Excel file validated")
             
-            # 3. Create output folder
-            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-            output_folder = os.path.join(tempfile.gettempdir(), f"cv_output_{timestamp}")
-            os.makedirs(output_folder, exist_ok=True)
-            self.temp_dirs.append(output_folder)
+            # 3. Gunakan output folder yang dipilih user atau buat yang baru
+            if output_folder_path and os.path.isdir(output_folder_path):
+                # Gunakan folder yang dipilih user
+                user_output_folder = output_folder_path
+            else:
+                # Buat folder baru dengan timestamp
+                timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+                user_output_folder = os.path.join(tempfile.gettempdir(), f"cv_output_{timestamp}")
+            
+            os.makedirs(user_output_folder, exist_ok=True)
+            self.temp_dirs.append(user_output_folder)
             
             # 4. Process OCR and Analysis
             progress(0.3, desc="Processing PDFs with OCR...")
             df_result = process_all_documents_with_competency(
                 input_folder=input_folder,
                 excel_path=excel_path,
-                output_folder=output_folder,
-                output_excel=f"hasil_analisis_{timestamp}.xlsx"
+                output_folder=user_output_folder,
+                output_excel=f"hasil_analisis_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
             )
             
             if df_result.empty:
@@ -283,7 +318,7 @@ class CVSummaryProcessor:
             progress(0.7, desc=f"Processed {len(df_result)} candidates")
             
             # 5. Find generated Excel file
-            excel_files = glob.glob(os.path.join(output_folder, "hasil_analisis_*.xlsx"))
+            excel_files = glob.glob(os.path.join(user_output_folder, "hasil_analisis_*.xlsx"))
             if not excel_files:
                 return None, None, "❌ File Excel hasil tidak ditemukan!"
             
@@ -293,11 +328,11 @@ class CVSummaryProcessor:
             if template_file is None:
                 return None, None, "❌ Template PPT tidak ditemukan!"
             
-            template_path = template_file.name
+            template_path = template_file.name if hasattr(template_file, 'name') else template_file
             progress(0.75, desc="Generating presentations...")
             
             # 7. Generate PowerPoint presentations
-            ppt_output_dir = os.path.join(output_folder, "presentations")
+            ppt_output_dir = os.path.join(user_output_folder, "presentations")
             os.makedirs(ppt_output_dir, exist_ok=True)
             
             num_ppts = generate_presentations_from_csv(
@@ -308,16 +343,13 @@ class CVSummaryProcessor:
             
             progress(0.9, desc=f"Generated {num_ppts} presentations")
             
-            # 8. Create ZIP file untuk download
-            zip_path = os.path.join(output_folder, f"cv_summary_results_{timestamp}.zip")
-            shutil.make_archive(zip_path.replace('.zip', ''), 'zip', output_folder)
-            
             progress(1.0, desc="Complete!")
             
-            # 9. Generate summary report
-            summary = self._generate_summary_report(df_result, num_ppts, output_folder)
+            # 8. Generate summary report (TANPA ZIP FILE)
+            summary = self._generate_summary_report(df_result, num_ppts, user_output_folder)
             
-            return result_excel, zip_path, summary
+            # 9. Return folder path sebagai hasil, bukan ZIP file
+            return result_excel, user_output_folder, summary
             
         except Exception as e:
             error_msg = f"❌ Error: {str(e)}"
@@ -330,7 +362,7 @@ class CVSummaryProcessor:
                 self.sp_handler.cleanup()
     
     def _generate_summary_report(self, df, num_ppts, output_folder):
-        """Generate summary report"""
+        """Generate summary report TANPA ZIP"""
         report = f"""
 ✅ **PROSES SELESAI!**
 
@@ -345,10 +377,18 @@ class CVSummaryProcessor:
 - PowerPoint presentations: ✓
 - Text files (OCR results): ✓
 
+📍 **Lokasi Folder Hasil:**
+`{output_folder}`
+
+📂 **Struktur Folder:**
+- `{output_folder}/` - Folder utama hasil
+- `{output_folder}/presentations/` - File PowerPoint (.pptx)
+- `{output_folder}/hasil_analisis_*.xlsx` - File Excel hasil
+
 ⚠️ **Catatan Keamanan:**
 - Semua data diproses secara lokal
-- File temporary akan dihapus otomatis
-- Download hasil segera sebelum session berakhir
+- File temporary akan dihapus otomatis setelah session berakhir
+- File hasil telah disimpan di folder yang Anda pilih
 """
         return report
     
@@ -356,7 +396,9 @@ class CVSummaryProcessor:
         """Cleanup all temporary directories"""
         for temp_dir in self.temp_dirs:
             if os.path.exists(temp_dir):
-                shutil.rmtree(temp_dir)
+                # Hanya hapus jika di temporary directory sistem
+                if temp_dir.startswith(tempfile.gettempdir()):
+                    shutil.rmtree(temp_dir)
         self.temp_dirs.clear()
 
     def validate_sharepoint_url(self, url):
@@ -396,11 +438,7 @@ def create_interface():
     }
     """
     
-    # For Gradio 6+, use the new way to apply CSS
     with gr.Blocks(title="CV Summary Generator - Secure") as app:
-        
-        # Add CSS to the app
-        app.css = custom_css
         
         gr.Markdown("""
         # 🔒 CV Summary Generator (Secure & Private)
@@ -418,26 +456,26 @@ def create_interface():
         </div>
         """)
         
-        # ... rest of your code ...
-        
         with gr.Row():
             with gr.Column(scale=2):
                 
                 # Input Type Selection
                 input_type = gr.Radio(
-                    choices=["Local Folder", "SharePoint Link"],
-                    value="Local Folder",
+                    choices=["Upload File/Folder", "SharePoint Link"],
+                    value="Upload File/Folder",
                     label="📂 Pilih Sumber Input",
                     info="Pilih dari mana dokumen akan diambil"
                 )
                 
-                # Local Folder Input
-                with gr.Group(visible=True) as local_group:
-                    local_folder = gr.Textbox(
-                        label="📁 Path Folder Lokal",
-                        placeholder="Contoh: D:/Project OCR Telkom/Input",
-                        info="Folder berisi CV (PDF) dan Assessment (PDF)"
+                # Upload File/Folder Input
+                with gr.Group(visible=True) as upload_group:
+                    upload_files = gr.File(
+                        label="📁 Upload CV & Assessment Files (PDF atau ZIP)",
+                        file_count="multiple",
+                        file_types=[".pdf", ".zip"],
+                        type="filepath"
                     )
+                    gr.Markdown("💡 **Info:** Upload file PDF atau ZIP yang berisi CV dan Assessment")
                 
                 # SharePoint Input
                 with gr.Group(visible=False) as sharepoint_group:
@@ -472,6 +510,17 @@ def create_interface():
                     type="filepath"
                 )
                 
+                # Output Folder Selection
+                output_folder = gr.Textbox(
+                    label="📂 Pilih Folder Output",
+                    placeholder="C:/Users/NamaUser/Documents/CV_Results",
+                    info="Pilih folder untuk menyimpan hasil (PPT dan Excel)"
+                )
+                
+                # Browse Button
+                with gr.Row():
+                    browse_btn = gr.Button("📁 Browse Folder", size="sm")
+                
                 # Process Button
                 process_btn = gr.Button(
                     "🚀 Proses Pipeline End-to-End",
@@ -489,14 +538,15 @@ def create_interface():
                     visible=False
                 )
                 
-                zip_output = gr.File(
-                    label="📦 Download All Results (ZIP)",
+                # Ganti ZIP output dengan folder path info
+                folder_output = gr.Textbox(
+                    label="📁 Lokasi Folder Hasil",
                     visible=False
                 )
         
         # Toggle visibility based on input type
         def toggle_input_type(choice):
-            if choice == "Local Folder":
+            if choice == "Upload File/Folder":
                 return gr.update(visible=True), gr.update(visible=False)
             else:
                 return gr.update(visible=False), gr.update(visible=True)
@@ -504,38 +554,92 @@ def create_interface():
         input_type.change(
             fn=toggle_input_type,
             inputs=[input_type],
-            outputs=[local_group, sharepoint_group]
+            outputs=[upload_group, sharepoint_group]
+        )
+        
+        # Function untuk browse folder
+        def browse_folder():
+            import tkinter as tk
+            from tkinter import filedialog
+            
+            root = tk.Tk()
+            root.withdraw()  # Hide the main window
+            root.attributes('-topmost', True)  # Bring dialog to front
+            
+            folder_path = filedialog.askdirectory(
+                title="Pilih Folder untuk Menyimpan Hasil",
+                initialdir=os.path.expanduser("~")  # Start from user's home directory
+            )
+            
+            root.destroy()
+            
+            if folder_path:
+                return folder_path
+            else:
+                return ""
+        
+        # Browse button click
+        browse_btn.click(
+            fn=browse_folder,
+            inputs=[],
+            outputs=[output_folder]
         )
         
         # Process button click
-        def process_wrapper(*args):
-            excel, zip_file, summary = processor.process_pipeline(*args)
-            
-            if excel and zip_file:
-                return (
-                    summary,
-                    gr.update(value=excel, visible=True),
-                    gr.update(value=zip_file, visible=True)
+        def process_wrapper(input_type, upload_files, sp_url, sp_username, sp_password, 
+                          excel_file, template_file, output_folder_path):
+            try:
+                # Validasi output folder
+                if not output_folder_path:
+                    return "❌ Silakan pilih folder output terlebih dahulu!", gr.update(visible=False), gr.update(visible=False)
+                
+                # Buat folder output jika belum ada
+                os.makedirs(output_folder_path, exist_ok=True)
+                
+                # Panggil fungsi process_pipeline
+                excel, folder_result, summary = processor.process_pipeline(
+                    input_type=input_type,
+                    uploaded_files=upload_files,
+                    sharepoint_url=sp_url,
+                    sp_username=sp_username,
+                    sp_password=sp_password,
+                    excel_file=excel_file,
+                    template_file=template_file,
+                    output_folder_path=output_folder_path,
+                    progress=gr.Progress()
                 )
-            else:
-                return (
-                    summary,
-                    gr.update(visible=False),
-                    gr.update(visible=False)
-                )
+                
+                if excel and folder_result:
+                    return (
+                        summary,
+                        gr.update(value=excel, visible=True),
+                        gr.update(value=folder_result, visible=True)
+                    )
+                else:
+                    return (
+                        summary,
+                        gr.update(visible=False),
+                        gr.update(visible=False)
+                    )
+                    
+            except Exception as e:
+                error_msg = f"❌ Error: {str(e)}"
+                print(error_msg)
+                return error_msg, gr.update(visible=False), gr.update(visible=False)
         
         process_btn.click(
             fn=process_wrapper,
             inputs=[
                 input_type,
-                local_folder,
+                upload_files,
                 sp_url,
                 sp_username,
                 sp_password,
                 excel_file,
-                template_file
+                template_file,
+                output_folder
             ],
-            outputs=[status_output, excel_output, zip_output]
+            outputs=[status_output, excel_output, folder_output]
         )
         
         gr.Markdown("""
@@ -543,18 +647,28 @@ def create_interface():
         ### 📖 Panduan Penggunaan:
         
         1. **Pilih Sumber Input:**
-           - **Local Folder:** Masukkan path folder yang berisi CV dan Assessment (PDF)
+           - **Upload File/Folder:** Upload file PDF atau ZIP yang berisi CV dan Assessment
            - **SharePoint:** Masukkan URL SharePoint dan credentials
         
         2. **Upload Files:**
+           - CV & Assessment (PDF atau ZIP)
            - Excel Competency (wajib)
            - Template PowerPoint (wajib)
         
-        3. **Klik Proses:** Sistem akan menjalankan pipeline lengkap secara otomatis
+        3. **Pilih Folder Output:** Klik "Browse Folder" untuk memilih lokasi penyimpanan hasil
         
-        4. **Download Hasil:** Download Excel dan ZIP file yang berisi semua hasil
+        4. **Klik Proses:** Sistem akan menjalankan pipeline lengkap secara otomatis
+        
+        5. **Hasil:** 
+           - Download file Excel hasil analisis
+           - File PowerPoint akan langsung tersimpan di folder yang Anda pilih
         
         ⏱️ **Estimasi Waktu:** 5-15 menit tergantung jumlah dokumen
+        
+        **📝 Catatan Upload:**
+        - Bisa upload multiple PDF files langsung
+        - Atau upload satu ZIP file yang berisi semua PDF
+        - Format file yang didukung: .pdf, .zip
         """)
     
     return app
@@ -572,9 +686,9 @@ if __name__ == "__main__":
     # Create interface
     app = create_interface()
     
-    #API Deployment
+    # Launch with updated API settings
     app.launch(
-        server_name="0.0.0.0",  # Listen on all network interfaces (useful for cloud deployment)
+        server_name="0.0.0.0",  # Listen on all network interfaces
         server_port=int(os.getenv("PORT", 7860)),  # Use environment variable for dynamic port
         share=False,
         auth=AUTH_CREDENTIALS,  # List of tuples

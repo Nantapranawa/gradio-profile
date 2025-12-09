@@ -276,12 +276,12 @@ def analyze_with_gemini_advanced(text_content: str, competency_data: List[Dict] 
         
         'business_impact': """
         Dari teks CV/penilaian berikut, identifikasi potensi dampak bisnis dalam Bahasa Inggris:
-        Ambil top 6 business impact.
+        Ambil top 5 business impact.
 
         ATURAN SANGAT PENTING:
-        - DILARANG KERAS menulis: "Berikut adalah", "Berdasarkan teks", "Top 6", atau penjelasan apapun
+        - DILARANG KERAS menulis: "Berikut adalah", "Berdasarkan teks", "Top 5", atau penjelasan apapun
         - LANGSUNG mulai dengan bullet point pertama
-        - HARUS tepat 6 poin
+        - HARUS tepat 5 poin
         - Format: • [Dampak bisnis]
         - Hanya kalimat singkat pada dampak bisnis saja seperti 5-7 kata saja, tanpa tambahan konteks atau penjelasan lainnya jadi to the point saja pada business impactnya
         
@@ -292,7 +292,7 @@ def analyze_with_gemini_advanced(text_content: str, competency_data: List[Dict] 
         • Revamped Procurement policies and procedures
         • Redesigned and enhanced workplace areas
         
-        Jangan ada preambles atau penjelasan pada awal response seperti "Berikut adalah top 7 potensi dampak bisnis yang diidentifikasi dari teks CV/penilaian:" hilangkan dan tidak usah digunakan saja jadi response jawaban seperti itu sehingga langsung ke poin-poin business impactnya.
+        Jangan ada preambles atau penjelasan pada awal response seperti "Berikut adalah top 5 potensi dampak bisnis yang diidentifikasi dari teks CV/penilaian:" hilangkan dan tidak usah digunakan saja jadi response jawaban seperti itu sehingga langsung ke poin-poin business impactnya.
         
         Teks yang akan dianalisis:
         """,
@@ -455,35 +455,74 @@ def pdf_to_text_ocr_advanced(pdf_path, output_txt_path=None, lang='ind', preproc
 
 def extract_name_from_filename(filename):
     """Ekstrak nama dari filename dengan berbagai pattern"""
+    # Hapus ekstensi file
     name = os.path.splitext(filename)[0]
     
-    # Hapus prefix/suffix umum
+    print(f"  Debug - Original filename: {filename}")
+    print(f"  Debug - Name after removing extension: {name}")
+    
+    # HAPUS SEMUA PATTERN CV (case-insensitive) TERLEBIH DAHULU
+    # Pattern untuk menghapus "CV_" di awal, tengah, atau akhir
     patterns_to_remove = [
-        # Pattern untuk CV (case insensitive)
-        r'(?i)^Cv[\s_\-]*',      # CV di awal
-        r'(?i)[\s_\-]*cv$',      # CV di akhir
-        r'(?i)[\s_\-]*cv[\s_\-]*', # CV di tengah
+        # 1. Pattern untuk CV di awal dengan berbagai separator
+        r'^cv[\s_\-]+',           # "CV_" di awal
+        r'^cv$',                  # Hanya "CV"
         
-        # Pattern untuk curriculum vitae
-        r'(?i)^curriculum[\s_\-]*vitae[\s_\-]*',
-        r'(?i)[\s_\-]*curriculum[\s_\-]*vitae$',
+        # 2. Pattern untuk CV di tengah dengan berbagai separator
+        r'[\s_\-]+cv[\s_\-]+',    # "_CV_" di tengah
         
-        # Pattern lainnya yang umum
-        'pdf_', 'penilaian_', 'assessment_', 'test_', 'hasil_',
-        '_penilaian', '_assessment', '_test', '_hasil',
-        '-penilaian', '-assessment',
-        r'[\d_\-\.\(\)\[\]\{\}]+'  # Angka dan karakter khusus
+        # 3. Pattern untuk CV di akhir
+        r'[\s_\-]+cv$',           # "_CV" di akhir
+        
+        # 4. Pattern khusus untuk "Cv_" (huruf besar C, kecil v)
+        r'^Cv[\s_\-]+',           # "Cv_" di awal
+        r'[\s_\-]+Cv[\s_\-]+',    # "_Cv_" di tengah
+        r'[\s_\-]+Cv$',           # "_Cv" di akhir
+        
+        # 5. Hapus karakter khusus dan angka
+        r'[\d_\-\.\(\)\[\]\{\}]+',
+        
+        # 6. Pattern umum lainnya
+        r'resume[\s_\-]*',
+        r'curriculum[\s_\-]*vitae[\s_\-]*',
+        r'application[\s_\-]*',
+        r'^[\s_\-]+',             # Spasi/underscore di awal
+        r'[\s_\-]+$',             # Spasi/underscore di akhir
     ]
     
     for pattern in patterns_to_remove:
-        name = name.replace(pattern, ' ')
+        name = re.sub(pattern, ' ', name, flags=re.IGNORECASE)  # Gunakan flag di luar pola
+        # Debug setiap step
+        # print(f"  Debug - After pattern '{pattern}': {name}")
     
-    # Hapus karakter khusus dan angka
-    name = re.sub(r'[\d_\-\.]+', ' ', name)
+    # HAPUS KHUSUS untuk kasus "CV_nama_kandidat" 
+    # Split by underscore dan ambil bagian yang bukan "CV" (case-insensitive)
+    parts = re.split(r'[\s_\-]+', name)
+    print(f"  Debug - Parts after split: {parts}")
     
-    # Bersihkan spasi berlebih dan title case
-    name = ' '.join([word for word in name.split() if len(word) > 1])
-    name = name.title()
+    filtered_parts = []
+    for part in parts:
+        part_lower = part.lower()
+        # Skip jika bagian adalah "cv" dalam berbagai bentuk
+        if part_lower in ['cv', 'c_v', 'c-v']:
+            continue
+        # Skip jika bagian terlalu pendek (kurang dari 2 karakter)
+        if len(part) < 2:
+            continue
+        filtered_parts.append(part)
+    
+    name = ' '.join(filtered_parts)
+    
+    # Clean up: hapus spasi berlebih
+    name = re.sub(r'\s+', ' ', name).strip()
+    
+    print(f"  Debug - Final name before title case: {name}")
+    
+    # Title case untuk nama
+    if name:
+        name = name.title()
+    
+    print(f"  Debug - Final name: {name}")
     
     return name
 

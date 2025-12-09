@@ -171,8 +171,8 @@ def replace_placeholders(slide, row):
     
     # Mapping placeholder dengan semua kemungkinan nama kolom
     placeholder_mappings = {
+        '{{nik}}': ['nik', 'id', 'employee_id', 'employee id', 'no_induk', 'nomor induk'],
         '{{nama}}': ['nama', 'Nama', 'name', 'Name', 'candidate_name'],
-        '{{nik}}': ['nik', 'NIK', 'id', 'ID', 'employee_id', 'EmployeeID'],
         '{{executive summary}}': ['summary executive', 'summary_executive', 'executive_summary', 'summary'],
         '{{education}}': ['education', 'Education', 'pendidikan', 'Pendidikan'],
         '{{jabatan terakhir}}': ['jabatan terakhir', 'jabatan', 'position', 'jabatan_terakhir', 'current_position'],
@@ -193,10 +193,12 @@ def replace_placeholders(slide, row):
         
         print(f"      Original text: {original_text[:100]}...")
         
+        new_text = original_text
+        
         # Cek setiap placeholder pattern
         for placeholder, possible_columns in placeholder_mappings.items():
             # Cari placeholder dengan flexible matching
-            if placeholder in original_text:
+            if placeholder in new_text:
                 print(f"      Found placeholder: {placeholder}")
                 
                 # Cari nilai dari berbagai kemungkinan kolom
@@ -223,37 +225,40 @@ def replace_placeholders(slide, row):
                     if placeholder == '{{nik}}':
                         replacement_value = "N/A"
                         print(f"        ⚠ NIK not found, using default: N/A")
+                    elif placeholder == '{{nama}}':
+                        replacement_value = "N/A"
+                        print(f"        ⚠ NAMA not found, using default: N/A")
                     else:
                         replacement_value = ""
                         print(f"        ⚠ Column not found for {placeholder}")
                 
                 # Replace text
-                new_text = original_text.replace(placeholder, replacement_value)
-                text_frame.text = new_text
+                new_text = new_text.replace(placeholder, replacement_value)
                 print(f"        Replaced: '{placeholder}' -> '{replacement_value[:30]}...'")
-                
-                # Apply formatting
-                try:
-                    for paragraph in text_frame.paragraphs:
-                        for run in paragraph.runs:
-                            # Set font size berdasarkan placeholder
-                            if placeholder == '{{nama}}':
-                                run.font.size = Pt(15)
-                                run.font.bold = True
-                            elif placeholder == '{{nik}}':
-                                run.font.size = Pt(15)
-                                run.font.bold = True
-                            elif placeholder == '{{jabatan terakhir}}':
-                                run.font.size = Pt(15)
-                                run.font.bold = False
-                            else:
-                                run.font.size = Pt(10.5)
-                                run.font.bold = False
-                except Exception as e:
-                    print(f"        ⚠ Formatting error: {e}")
-                
-                # Setelah replace, break untuk shape ini
-                break
+        
+        # Set new text after all replacements
+        if new_text != original_text:
+            text_frame.text = new_text
+            
+            # Apply formatting
+            try:
+                for paragraph in text_frame.paragraphs:
+                    for run in paragraph.runs:
+                        # Set font size berdasarkan konten
+                        if "{{nama}}" in original_text or "Nama" in run.text:
+                            run.font.size = Pt(15)
+                            run.font.bold = True
+                        elif "{{nik}}" in original_text or "NIK" in run.text:
+                            run.font.size = Pt(15)
+                            run.font.bold = True
+                        elif "{{jabatan terakhir}}" in original_text or "Jabatan" in run.text:
+                            run.font.size = Pt(15)
+                            run.font.bold = False
+                        else:
+                            run.font.size = Pt(10.5)
+                            run.font.bold = False
+            except Exception as e:
+                print(f"        ⚠ Formatting error: {e}")
 
 def handle_jabatan_placeholder(text_frame, row):
     """
