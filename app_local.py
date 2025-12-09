@@ -215,6 +215,8 @@ class CVSummaryProcessor:
         self.sp_handler = SharePointHandler()
         self.temp_dirs = []
         self.current_output_folder = None
+        self.result_excel_path = None
+        self.result_zip_path = None
     
     def process_pipeline(self, 
                         input_type,
@@ -230,6 +232,10 @@ class CVSummaryProcessor:
         """
         try:
             progress(0, desc="Initializing...")
+            
+            # Reset previous results
+            self.result_excel_path = None
+            self.result_zip_path = None
             
             # 1. Prepare input folder
             if input_type == "Upload File/Folder":
@@ -323,7 +329,7 @@ class CVSummaryProcessor:
             if not excel_files:
                 return None, None, "❌ File Excel hasil tidak ditemukan!"
             
-            result_excel = excel_files[-1]
+            self.result_excel_path = excel_files[-1]
             
             # 7. Generate PowerPoint presentations
             progress(0.7, desc="Generating presentations...")
@@ -332,20 +338,20 @@ class CVSummaryProcessor:
             os.makedirs(ppt_output_dir, exist_ok=True)
             
             num_ppts = generate_presentations_from_csv(
-                csv_path=result_excel,
+                csv_path=self.result_excel_path,
                 template_path=template_path,
                 output_dir=ppt_output_dir
             )
             
             progress(0.8, desc=f"Generated {num_ppts} presentations")
             
-            # 8. Create ZIP file untuk download (tanpa RAR)
-            zip_path = os.path.join(self.current_output_folder, f"cv_summary_results_{timestamp}.zip")
+            # 8. Create ZIP file untuk download
+            self.result_zip_path = os.path.join(self.current_output_folder, f"cv_summary_results_{timestamp}.zip")
             
             # Create ZIP file using zipfile module
-            with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
+            with zipfile.ZipFile(self.result_zip_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
                 # Add Excel file
-                zipf.write(result_excel, os.path.basename(result_excel))
+                zipf.write(self.result_excel_path, os.path.basename(self.result_excel_path))
                 
                 # Add all presentations
                 for root, dirs, files in os.walk(ppt_output_dir):
@@ -358,32 +364,32 @@ class CVSummaryProcessor:
             progress(0.9, desc="Creating output files...")
             
             # 9. Verify files exist
-            if not os.path.exists(result_excel):
-                return None, None, f"❌ File Excel tidak ditemukan: {result_excel}"
+            if not os.path.exists(self.result_excel_path):
+                return None, None, f"❌ File Excel tidak ditemukan: {self.result_excel_path}"
             
-            if not os.path.exists(zip_path):
-                return None, None, f"❌ File ZIP tidak ditemukan: {zip_path}"
+            if not os.path.exists(self.result_zip_path):
+                return None, None, f"❌ File ZIP tidak ditemukan: {self.result_zip_path}"
             
             progress(1.0, desc="Complete!")
             
             # 10. Generate summary report
-            summary = self._generate_summary_report(df_result, num_ppts, zip_path)
+            summary = self._generate_summary_report(df_result, num_ppts)
             
-            return result_excel, zip_path, summary
+            return summary
             
         except Exception as e:
             error_msg = f"❌ Error: {str(e)}"
             print(error_msg)
             import traceback
             traceback.print_exc()
-            return None, None, error_msg
+            return error_msg
         
         finally:
             # Cleanup SharePoint temp files
             if input_type == "SharePoint":
                 self.sp_handler.cleanup()
     
-    def _generate_summary_report(self, df, num_ppts, zip_path):
+    def _generate_summary_report(self, df, num_ppts):
         """Generate summary report"""
         # Calculate statistics safely
         nik_count = 0
@@ -414,12 +420,28 @@ class CVSummaryProcessor:
 2. Folder `presentations/` dengan semua PPT hasil
 3. File teks hasil OCR (jika ada)
 
+⬇️ **Download Hasil:**
+- Klik tombol '📊 Download Excel' untuk file Excel saja
+- Klik tombol '📦 Download ZIP' untuk semua hasil
+
 ⚠️ **Catatan:**
 - Semua data diproses secara lokal
+- File temporary akan dihapus otomatis setelah session berakhir
 - Download hasil segera sebelum session berakhir
-- File temporary akan dihapus otomatis
 """
         return report
+    
+    def get_excel_file(self):
+        """Get Excel file for download"""
+        if self.result_excel_path and os.path.exists(self.result_excel_path):
+            return self.result_excel_path
+        return None
+    
+    def get_zip_file(self):
+        """Get ZIP file for download"""
+        if self.result_zip_path and os.path.exists(self.result_zip_path):
+            return self.result_zip_path
+        return None
     
     def cleanup_all(self):
         """Cleanup all temporary directories"""
@@ -431,6 +453,8 @@ class CVSummaryProcessor:
                     print(f"Error cleaning up {temp_dir}: {e}")
         self.temp_dirs.clear()
         self.current_output_folder = None
+        self.result_excel_path = None
+        self.result_zip_path = None
 
     def validate_sharepoint_url(self, url):
         """Validate SharePoint URL format"""
@@ -476,6 +500,10 @@ def create_interface():
     }
     .download-btn {
         margin: 5px;
+        width: 100%;
+    }
+    .download-row {
+        margin-top: 10px;
     }
     """
     
@@ -563,41 +591,27 @@ def create_interface():
                 
                 status_output = gr.Markdown("Menunggu input...")
                 
-                # Download Section - MENGGUNAKAN BUTTON
+                # Download Section - MENGGUNAKAN FILE COMPONENT YANG LANGSUNG
                 gr.Markdown("### 📥 Download Hasil")
-                gr.Markdown("Setelah proses selesai, klik tombol untuk mendownload:")
+                gr.Markdown("Setelah proses selesai, file akan tersedia di sini:")
                 
                 with gr.Group():
-                    # Container untuk menyimpan path file sementara
-                    excel_path_store = gr.State(None)
-                    zip_path_store = gr.State(None)
+                    # Hidden components untuk menyimpan status
+                    process_complete = gr.State(False)
                     
-                    with gr.Row():
-                        excel_download_btn = gr.Button(
-                            "📊 Download Excel Results",
-                            visible=False,
-                            variant="secondary",
-                            size="sm",
-                            elem_classes="download-btn"
-                        )
-                        
-                        zip_download_btn = gr.Button(
-                            "📦 Download All Results (ZIP)",
-                            visible=False,
-                            variant="secondary",
-                            size="sm",
-                            elem_classes="download-btn"
-                        )
-                    
-                    # Hidden file components untuk handle download
-                    excel_download_file = gr.File(
-                        label="",
-                        visible=False
+                    # File components untuk download - TETAP VISIBLE TAPI DISABLE AWALNYA
+                    excel_output = gr.File(
+                        label="📊 Download Excel Results",
+                        visible=True,
+                        interactive=False,
+                        type="filepath"
                     )
                     
-                    zip_download_file = gr.File(
-                        label="",
-                        visible=False
+                    zip_output = gr.File(
+                        label="📦 Download All Results (ZIP)",
+                        visible=True,
+                        interactive=False,
+                        type="filepath"
                     )
         
         # Toggle visibility based on input type
@@ -613,24 +627,6 @@ def create_interface():
             outputs=[upload_group, sharepoint_group]
         )
         
-        # Function untuk handle Excel download
-        def download_excel_handler(excel_path):
-            if excel_path and os.path.exists(excel_path):
-                print(f"Downloading Excel: {excel_path}")
-                # Return file untuk download
-                return gr.update(value=excel_path, visible=True)
-            print("Excel file not found")
-            return gr.update(visible=False)
-        
-        # Function untuk handle ZIP download
-        def download_zip_handler(zip_path):
-            if zip_path and os.path.exists(zip_path):
-                print(f"Downloading ZIP: {zip_path}")
-                # Return file untuk download
-                return gr.update(value=zip_path, visible=True)
-            print("ZIP file not found")
-            return gr.update(visible=False)
-        
         # Process button click
         def process_wrapper(input_type, upload_files, sp_url, sp_username, sp_password, 
                           excel_file, template_file):
@@ -638,7 +634,7 @@ def create_interface():
                 print("Processing started...")
                 
                 # Panggil fungsi process_pipeline
-                excel_path, zip_path, summary = processor.process_pipeline(
+                summary = processor.process_pipeline(
                     input_type=input_type,
                     uploaded_files=upload_files,
                     sharepoint_url=sp_url,
@@ -649,53 +645,44 @@ def create_interface():
                     progress=gr.Progress()
                 )
                 
-                # Debug info
-                print(f"Excel path: {excel_path}")
-                print(f"ZIP path: {zip_path}")
+                # Get file paths setelah proses selesai
+                excel_path = processor.get_excel_file()
+                zip_path = processor.get_zip_file()
+                
+                print(f"Excel path after process: {excel_path}")
+                print(f"ZIP path after process: {zip_path}")
                 
                 if excel_path and zip_path and os.path.exists(excel_path) and os.path.exists(zip_path):
                     print("Both files exist, updating UI...")
                     return (
                         summary,
-                        excel_path,  # Store path untuk Excel
-                        zip_path,    # Store path untuk ZIP
-                        gr.update(visible=True),  # Excel button visible
-                        gr.update(visible=True),  # ZIP button visible
-                        gr.update(visible=False),  # Excel file hidden
-                        gr.update(visible=False)   # ZIP file hidden
+                        gr.update(value=excel_path, visible=True, interactive=True),
+                        gr.update(value=zip_path, visible=True, interactive=True),
+                        True  # process_complete
                     )
                 elif excel_path and os.path.exists(excel_path):
                     print("Only Excel exists")
                     return (
                         summary + "\n\n⚠️ **Catatan:** File ZIP tidak berhasil dibuat, tapi Excel sudah tersedia.",
-                        excel_path,  # Store path untuk Excel
-                        None,        # No ZIP path
-                        gr.update(visible=True),  # Excel button visible
-                        gr.update(visible=False), # ZIP button hidden
-                        gr.update(visible=False),  # Excel file hidden
-                        gr.update(visible=False)   # ZIP file hidden
+                        gr.update(value=excel_path, visible=True, interactive=True),
+                        gr.update(visible=True, interactive=False, value=None),
+                        True  # process_complete
                     )
                 elif zip_path and os.path.exists(zip_path):
                     print("Only ZIP exists")
                     return (
                         summary + "\n\n⚠️ **Catatan:** File Excel tidak berhasil dibuat, tapi ZIP sudah tersedia.",
-                        None,        # No Excel path
-                        zip_path,    # Store path untuk ZIP
-                        gr.update(visible=False), # Excel button hidden
-                        gr.update(visible=True),  # ZIP button visible
-                        gr.update(visible=False),  # Excel file hidden
-                        gr.update(visible=False)   # ZIP file hidden
+                        gr.update(visible=True, interactive=False, value=None),
+                        gr.update(value=zip_path, visible=True, interactive=True),
+                        True  # process_complete
                     )
                 else:
                     print("No valid files")
                     return (
                         summary,
-                        None,  # No Excel path
-                        None,  # No ZIP path
-                        gr.update(visible=False), # Excel button hidden
-                        gr.update(visible=False), # ZIP button hidden
-                        gr.update(visible=False),  # Excel file hidden
-                        gr.update(visible=False)   # ZIP file hidden
+                        gr.update(visible=True, interactive=False, value=None),
+                        gr.update(visible=True, interactive=False, value=None),
+                        False  # process_complete
                     )
                     
             except Exception as e:
@@ -703,7 +690,7 @@ def create_interface():
                 print(f"Error details: {error_msg}")
                 import traceback
                 traceback.print_exc()
-                return error_msg, None, None, gr.update(visible=False), gr.update(visible=False), gr.update(visible=False), gr.update(visible=False)
+                return error_msg, gr.update(visible=True, interactive=False, value=None), gr.update(visible=True, interactive=False, value=None), False
         
         # Event handlers untuk process button
         process_btn.click(
@@ -719,34 +706,22 @@ def create_interface():
             ],
             outputs=[
                 status_output,           # summary text
-                excel_path_store,        # store excel path
-                zip_path_store,          # store zip path  
-                excel_download_btn,      # excel button visibility
-                zip_download_btn,        # zip button visibility
-                excel_download_file,     # hidden excel file component
-                zip_download_file        # hidden zip file component
+                excel_output,            # Excel file component
+                zip_output,              # ZIP file component
+                process_complete         # process status
             ]
         )
         
-        # Event handlers untuk download buttons
-        excel_download_btn.click(
-            fn=download_excel_handler,
-            inputs=[excel_path_store],
-            outputs=[excel_download_file]
-        ).then(
-            # Reset file visibility setelah 5 detik
-            fn=lambda: gr.update(visible=False),
-            outputs=[excel_download_file]
-        )
+        # Reset file components jika input berubah
+        def reset_downloads():
+            return (
+                gr.update(visible=True, interactive=False, value=None),
+                gr.update(visible=True, interactive=False, value=None)
+            )
         
-        zip_download_btn.click(
-            fn=download_zip_handler,
-            inputs=[zip_path_store],
-            outputs=[zip_download_file]
-        ).then(
-            # Reset file visibility setelah 5 detik
-            fn=lambda: gr.update(visible=False),
-            outputs=[zip_download_file]
+        input_type.change(
+            fn=reset_downloads,
+            outputs=[excel_output, zip_output]
         )
         
         # Cleanup when interface closes
@@ -767,16 +742,16 @@ def create_interface():
         3. **Klik Proses:** Sistem akan menjalankan pipeline lengkap secara otomatis
         
         4. **Download Hasil:** 
-           - **Excel Results:** Klik tombol untuk download file Excel
-           - **All Results (ZIP):** Klik tombol untuk download semua hasil termasuk PPT
+           - **Excel Results:** File akan muncul dan bisa di-download langsung
+           - **All Results (ZIP):** File ZIP akan muncul untuk di-download
         
         ⏱️ **Estimasi Waktu:** 5-15 menit tergantung jumlah dokumen
         
         **📝 Catatan:**
         - File hasil akan otomatis terhapus setelah session berakhir
         - Pastikan untuk mendownload file hasil segera setelah proses selesai
-        - Tombol download hanya muncul setelah proses selesai
         - Format output: Excel (.xlsx) dan ZIP file
+        - File akan muncul di area download setelah proses selesai
         """)
     
     return app
