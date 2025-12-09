@@ -572,13 +572,13 @@ if __name__ == "__main__":
     # Create interface
     app = create_interface()
     
-    # Launch with authentication
+    #API Deployment
     app.launch(
-        server_name="127.0.0.1",
-        server_port=7860,
+        server_name="0.0.0.0",  # Listen on all network interfaces (useful for cloud deployment)
+        server_port=int(os.getenv("PORT", 7860)),  # Use environment variable for dynamic port
         share=False,
         auth=AUTH_CREDENTIALS,  # List of tuples
         auth_message="🔒 Login dengan credentials yang diberikan",
-        ssl_verify=True,
+        ssl_verify=True,  # Only enable if you're deploying securely
         show_error=True
     )
