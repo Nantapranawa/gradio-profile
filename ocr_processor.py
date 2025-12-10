@@ -17,7 +17,28 @@ from dotenv import load_dotenv
 warnings.filterwarnings('ignore')
 load_dotenv()
 
-pytesseract.pytesseract.tesseract_cmd = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
+# ADD THIS instead (check if we're on Railway/Heroku):
+import sys
+
+# Check if we're in Railway/Linux environment
+if sys.platform == 'linux' or 'RAILWAY_ENVIRONMENT' in os.environ:
+    # Linux/Heroku/Railway path
+    pytesseract.pytesseract.tesseract_cmd = '/usr/bin/tesseract'
+else:
+    # Windows path for local development
+    pytesseract.pytesseract.tesseract_cmd = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
+
+def verify_ocr_installation():
+    """Verify that OCR engine is properly installed"""
+    try:
+        # Try to get tesseract version
+        version = pytesseract.get_tesseract_version()
+        print(f"✓ Tesseract OCR version: {version}")
+        return True
+    except Exception as e:
+        print(f"✗ Tesseract OCR not found or not accessible: {e}")
+        print("  Please ensure tesseract-ocr is installed in Railway environment")
+        return False
 
 # Konfigurasi Gemini API
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY") 
@@ -426,11 +447,48 @@ def pdf_to_text_ocr_advanced(pdf_path, output_txt_path=None, lang='ind', preproc
     print(f"    Memproses PDF: {os.path.basename(pdf_path)}")
     
     try:
+        # First verify OCR is available
+        try:
+            pytesseract.get_tesseract_version()
+        except Exception as ocr_err:
+            print(f"    ⚠ OCR Engine not available: {ocr_err}")
+            print(f"    ⚠ Attempting to use alternative OCR setup...")
+            # Try to find tesseract in common paths
+            common_paths = [
+                '/usr/bin/tesseract',
+                '/usr/local/bin/tesseract',
+                '/opt/homebrew/bin/tesseract'
+            ]
+            for path in common_paths:
+                if os.path.exists(path):
+                    pytesseract.pytesseract.tesseract_cmd = path
+                    print(f"    ✓ Found tesseract at: {path}")
+                    break
+        
+        # Rest of your function remains the same...
         images = convert_from_path(pdf_path, dpi=dpi, first_page=1, last_page=15)
+    
     except Exception as e:
         print(f"    Error mengkonversi PDF: {e}")
+        
+        # Additional debug info for Railway
+        if 'RAILWAY_ENVIRONMENT' in os.environ:
+            print(f"    ⚠ Railway Environment detected")
+            print(f"    ⚠ Checking for poppler-utils installation...")
+            # Check if poppler-utils is installed (for pdf2image)
+            try:
+                import subprocess
+                result = subprocess.run(['which', 'pdftoppm'], capture_output=True, text=True)
+                if result.returncode == 0:
+                    print(f"    ✓ pdftoppm found at: {result.stdout.strip()}")
+                else:
+                    print(f"    ✗ pdftoppm not found - poppler-utils may not be installed")
+            except:
+                pass
+        
         return ""
     
+    # Rest of your function remains unchanged...
     full_text = []
     
     for i, image in enumerate(images, start=1):
@@ -980,7 +1038,31 @@ def main():
     print("SISTEM ANALISIS TERINTEGRASI: CV + ASSESSMENT + EXCEL COMPETENCY + AI")
     print("="*80)
     
-    # Konfigurasi path dengan input folder
+    # ADD THIS: Verify OCR installation
+    print("\n🔍 VERIFIKASI SISTEM")
+    print("-"*60)
+    
+    # Check OCR installation
+    if not verify_ocr_installation():
+        print("⚠ OCR engine tidak tersedia. Program mungkin tidak dapat membaca PDF.")
+        print("⚠ Pastikan environment Railway memiliki:")
+        print("   - tesseract-ocr")
+        print("   - tesseract-ocr-ind (untuk bahasa Indonesia)")
+        print("   - libtesseract-dev")
+        print("   - poppler-utils")
+        
+        if 'RAILWAY_ENVIRONMENT' in os.environ:
+            print("\n⚠ Railway Environment detected")
+            print("⚠ Jika OCR tidak berjalan, periksa:")
+            print("   1. Railway.json build configuration")
+            print("   2. Package installation logs")
+        
+        continue_anyway = input("\nLanjutkan tanpa OCR? (y/n): ").strip().lower()
+        if continue_anyway != 'y':
+            print("Program dihentikan.")
+            return None
+    
+    # Rest of your main function remains the same...
     print("\n📁 KONFIGURASI PATH")
     print("-"*60)
     
