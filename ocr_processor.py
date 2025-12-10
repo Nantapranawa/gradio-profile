@@ -453,64 +453,75 @@ def pdf_to_text_ocr_advanced(pdf_path, output_txt_path=None, lang='ind', preproc
         # First verify OCR is available
         try:
             pytesseract.get_tesseract_version()
+            print(f"    ✓ Tesseract tersedia")
         except Exception as ocr_err:
             print(f"    ⚠ OCR Engine not available: {ocr_err}")
-            print(f"    ⚠ Attempting to use alternative OCR setup...")
-            # Try to find tesseract in common paths
-            common_paths = [
-                '/usr/bin/tesseract',
-                '/usr/local/bin/tesseract',
-                '/opt/homebrew/bin/tesseract'
-            ]
-            for path in common_paths:
-                if os.path.exists(path):
-                    pytesseract.pytesseract.tesseract_cmd = path
-                    print(f"    ✓ Found tesseract at: {path}")
-                    break
+            return ""
         
-        # Rest of your function remains the same...
-        images = convert_from_path(pdf_path, dpi=dpi, first_page=1, last_page=15)
-    
+        # Check file size
+        file_size = os.path.getsize(pdf_path) / (1024*1024)  # in MB
+        print(f"    📄 File size: {file_size:.2f} MB")
+        
+        # Limit pages untuk mencegah hang
+        max_pages = 5  # Hanya proses 5 halaman pertama
+        print(f"    ⚙️  Membatasi proses ke {max_pages} halaman pertama")
+        
+        try:
+            print(f"    🕐 Mengkonversi PDF ke gambar...")
+            # Convert with limited pages
+            images = convert_from_path(
+                pdf_path, 
+                dpi=200,  # Reduced DPI untuk kecepatan
+                first_page=1, 
+                last_page=max_pages,
+                thread_count=1  # Single thread untuk stabilitas
+            )
+            
+            if not images:
+                print(f"    ❌ Tidak ada gambar yang dihasilkan")
+                return ""
+                
+            print(f"    ✓ Berhasil mengkonversi {len(images)} halaman")
+            
+        except Exception as e:
+            print(f"    ❌ Error mengkonversi PDF: {e}")
+            return ""
+        
     except Exception as e:
-        print(f"    Error mengkonversi PDF: {e}")
-        
-        # Additional debug info for Railway
-        if 'RAILWAY_ENVIRONMENT' in os.environ:
-            print(f"    ⚠ Railway Environment detected")
-            print(f"    ⚠ Checking for poppler-utils installation...")
-            # Check if poppler-utils is installed (for pdf2image)
-            try:
-                import subprocess
-                result = subprocess.run(['which', 'pdftoppm'], capture_output=True, text=True)
-                if result.returncode == 0:
-                    print(f"    ✓ pdftoppm found at: {result.stdout.strip()}")
-                else:
-                    print(f"    ✗ pdftoppm not found - poppler-utils may not be installed")
-            except:
-                pass
-        
+        print(f"    ❌ Error dalam setup OCR: {e}")
         return ""
     
-    # Rest of your function remains unchanged...
+    # Process images
     full_text = []
     
     for i, image in enumerate(images, start=1):
-        if preprocess:
-            image = image.convert('L')
-            enhancer = ImageEnhance.Contrast(image)
-            image = enhancer.enhance(2)
-            image = image.filter(ImageFilter.SHARPEN)
+        print(f"    🔍 Processing page {i}/{len(images)}")
         
-        custom_config = r'--oem 3 --psm 6'
-        text = pytesseract.image_to_string(image, lang=lang, config=custom_config)
-        full_text.append(text)
+        if preprocess:
+            # Simple preprocessing
+            image = image.convert('L')  # Grayscale saja
+        
+        # OCR config
+        custom_config = r'--oem 3 --psm 6 -l ind'
+        
+        try:
+            text = pytesseract.image_to_string(image, lang=lang, config=custom_config)
+            full_text.append(text)
+            print(f"    ✓ Page {i} selesai ({len(text)} karakter)")
+        except Exception as e:
+            print(f"    ❌ Error OCR page {i}: {e}")
+            full_text.append("")
     
     result_text = "\n".join(full_text)
     
+    # Save if requested
     if output_txt_path:
-        os.makedirs(os.path.dirname(output_txt_path) if os.path.dirname(output_txt_path) else '.', exist_ok=True)
-        with open(output_txt_path, 'w', encoding='utf-8') as f:
-            f.write(result_text)
+        try:
+            os.makedirs(os.path.dirname(output_txt_path), exist_ok=True)
+            with open(output_txt_path, 'w', encoding='utf-8') as f:
+                f.write(result_text)
+        except Exception as e:
+            print(f"    ❌ Error saving text: {e}")
     
     return result_text
 

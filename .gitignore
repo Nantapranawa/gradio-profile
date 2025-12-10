@@ -1,3 +1,4 @@
-.env
 .encryption_key
 output/
+.env
+venv/
