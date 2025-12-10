@@ -1,1 +1,3 @@
-output
+.env
+.encryption_key
+output/
