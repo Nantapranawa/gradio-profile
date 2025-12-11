@@ -463,7 +463,7 @@ def pdf_to_text_ocr_advanced(pdf_path, output_txt_path=None, lang='ind', preproc
         print(f"    📄 File size: {file_size:.2f} MB")
         
         # Limit pages untuk mencegah hang
-        max_pages = 30
+        max_pages = 10
         print(f"    ⚙️  Membatasi proses ke {max_pages} halaman pertama")
         
         try:
